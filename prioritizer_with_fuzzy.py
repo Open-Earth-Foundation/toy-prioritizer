@@ -87,9 +87,8 @@ def read_actions(action_file):
 
 
 def write_output(output_file, top_actions):
-    print(top_actions)  # Debugging print statement
     with open(output_file, "w", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=["city", "action", "score"])
+        writer = csv.DictWriter(f, fieldnames=["city", "action", "score", "qualitative_score"])
         writer.writeheader()
         for action in top_actions:
             writer.writerow(
@@ -97,6 +96,7 @@ def write_output(output_file, top_actions):
                     "city": action["city"]["name"],
                     "action": action["action"],
                     "score": action["score"],
+                    "qualitative_score": action["qualitative_score"],
                 }
             )
 
@@ -104,7 +104,7 @@ def write_output(output_file, top_actions):
 def write_full_scores(output_file, all_scores):
     """Function to write all scores and LLM outputs to a CSV file."""
     with open(output_file, "w", newline="") as f:
-        fieldnames = ["city", "action", "score", "llm_output"]
+        fieldnames = ["city", "action", "score", "qualitative_score", "llm_output"]
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
         for entry in all_scores:
@@ -113,6 +113,7 @@ def write_full_scores(output_file, all_scores):
                     "city": entry["city"],
                     "action": entry["action"],
                     "score": entry["score"],
+                    "qualitative_score": entry["qualitative_score"],
                     "llm_output": entry["llm_output"],
                 }
             )
@@ -122,7 +123,7 @@ def qualitative_score(city, action):
     prompt = f"""
     According to the rules given, how would you prioritize the following action for the city with name {city["name"]},
     population {city["population"]}, area {city["area"]}, environment {city["environment"]}, budget {city["budget"]},
-    total GHG emissions in CO2eq {city["total_emission"]}, energy {city["energy_emissions"]}, 
+    total GHG emissions in CO2eq {city["total_emission"]}, energy {city["energy_emissions"]},
     transportation emissions {city["transportation_emissions"]}, waste emissions {city["waste_emissions"]}, and risk {city["risk"]}?
 
     Action: {action["name"]}, cost {action["cost"]}, GHG emissions reduction in CO2eq {action["emissions_reduction"]}, risk reduction {action["risk_reduction"]}, environment {action["environment"]}, population {action["population"]}, time {action["time_in_years"]}
@@ -203,6 +204,22 @@ SCORE.high = triangular(60, 90)
 SCORE.very_high = R(80, 100)
 
 
+def defuzzify_score(score):
+    """
+    Convert a numerical score into a qualitative value.
+    """
+    if score <= 20:
+        return "Very Low"
+    elif 20 < score <= 40:
+        return "Low"
+    elif 40 < score <= 60:
+        return "Medium"
+    elif 60 < score <= 80:
+        return "High"
+    else:
+        return "Very High"
+
+
 def fuzzy_score(city, action):
     # For each parameter, get the value and degrees of membership
 
@@ -273,22 +290,16 @@ def fuzzy_score(city, action):
         environment_match_degree,
         population_match_degree,
     ]
-    print(f"Emissions High Degree: {emissions_high_degree}")
-    print(f"Emissions Medium Degree: {emissions_medium_degree}")
-    print(f"Emissions Low Degree: {emissions_low_degree}")
-    print(f"Cost Low Degree: {cost_low_degree}")
-    print(f"Cost Medium Degree: {cost_medium_degree}")
-    print(f"Cost High Degree: {cost_high_degree}")
-    print(f"Time Short Degree: {time_short_degree}")
-    print(f"Time Medium Degree: {time_medium_degree}")
-    print(f"Time Long Degree: {time_long_degree}")
-    print(f"Risk High Degree: {risk_high_degree}")
-    print(f"Risk Medium Degree: {risk_medium_degree}")
-    print(f"Risk Low Degree: {risk_low_degree}")
-    print(f"Environment Match Degree: {environment_match_degree}")
-    print(f"Population Match Degree: {population_match_degree}")
-    print("##############################################")
-    print('')
+
+    # Combined print statement for easier commenting
+    print(f"Degrees:\n"
+          f"Emissions High: {emissions_high_degree}, Medium: {emissions_medium_degree}, Low: {emissions_low_degree}\n"
+          f"Cost Low: {cost_low_degree}, Medium: {cost_medium_degree}, High: {cost_high_degree}\n"
+          f"Time Short: {time_short_degree}, Medium: {time_medium_degree}, Long: {time_long_degree}\n"
+          f"Risk High: {risk_high_degree}, Medium: {risk_medium_degree}, Low: {risk_low_degree}\n"
+          f"Environment Match: {environment_match_degree}\n"
+          f"Population Match: {population_match_degree}\n"
+          f"##############################################\n")
 
     # Compute the average degree
     average_degree = sum(degrees) / len(degrees)
@@ -300,134 +311,6 @@ def fuzzy_score(city, action):
     return score
 
 
-def quantitative_score(city, action):
-    score = 0
-
-    # Add score for emissions_reduction
-    if action["emissions_reduction"] == "":
-        score += 0
-    else:
-        action_emissions_reduction = action["emissions_reduction"]
-        score += (
-            min(action_emissions_reduction, MAX_EMISSIONS_REDUCTIONS)
-            / MAX_EMISSIONS_REDUCTIONS
-        ) * SCORE_MAX
-
-    # Add score for risk_reduction
-    if action["risk_reduction"] == "":
-        score += 0
-    else:
-        score += scale_scores.get(action["risk_reduction"], 0) * SCORE_MAX
-
-    # Add score for environment
-    if action["environment"] == "":
-        score += SCORE_MAX
-    else:
-        score += SCORE_MAX if (action["environment"] == city["environment"]) else 0.0
-
-    # Add score for population
-    if action["population"] == "" or city["population"] == "":
-        score += SCORE_MAX / 2.0
-    else:
-        city_population = city["population"]
-        action_population = action["population"]
-        if action_population == city_population:
-            score += SCORE_MAX
-        else:
-            diff = abs(action_population - city_population)
-            if diff == 0:
-                ratio = 1.0
-            else:
-                ratio = min(city_population / diff, 1.0)
-            score += ratio * SCORE_MAX
-
-    # Add score for time_in_years
-    if action["time_in_years"] == "":
-        score += 0
-    else:
-        score += (
-            1 - (min(action["time_in_years"], MAX_TIME_IN_YEARS) / MAX_TIME_IN_YEARS)
-        ) * SCORE_MAX
-
-    # Add score for cost
-    if city["budget"] == "" or action["cost"] == "":
-        score += 0
-    else:
-        city_budget = city["budget"]
-        action_cost = action["cost"]
-        if city_budget == 0:
-            ratio = 1.0  # Avoid division by zero
-        else:
-            ratio = min(action_cost, city_budget) / city_budget
-        score += (1 - ratio) * SCORE_MAX
-
-    return score
-
-
-def qualitative_prioritizer(cities, actions, number_of_actions=5):
-    top_actions = []
-    all_scores = []  # List to store all scores
-    for city in cities:
-        scores = {}
-        for action in actions:
-            score, llm_response = qualitative_score(city, action)
-            scores[action["name"]] = score
-            all_scores.append(
-                {
-                    "city": city["name"],
-                    "action": action["name"],
-                    "score": score,
-                    "llm_output": llm_response,
-                }
-            )
-        actions_keys = scores.keys()
-        actions_keys = sorted(actions_keys, key=lambda x: scores[x], reverse=True)
-        top_action_names = actions_keys[:number_of_actions]
-        top_actions.extend(
-            [
-                {
-                    "city": city,
-                    "action": action,
-                    "score": scores[action],
-                }
-                for action in top_action_names
-            ]
-        )
-    return top_actions, all_scores  # Return both top actions and all scores
-
-
-def quantitative_prioritizer(cities, actions, number_of_actions=5):
-    top_actions = []
-    all_scores = []  # List to store all scores
-    for city in cities:
-        scores = {}
-        for action in actions:
-            score = quantitative_score(city, action)
-            scores[action["name"]] = score
-            all_scores.append(
-                {
-                    "city": city["name"],
-                    "action": action["name"],
-                    "score": score,
-                    "llm_output": "",  # No LLM output for quantitative method
-                }
-            )
-        actions_keys = scores.keys()
-        actions_keys = sorted(actions_keys, key=lambda x: scores[x], reverse=True)
-        top_action_names = actions_keys[:number_of_actions]
-        top_actions.extend(
-            [
-                {
-                    "city": city,
-                    "action": action,
-                    "score": scores[action],
-                }
-                for action in top_action_names
-            ]
-        )
-    return top_actions, all_scores  # Return both top actions and all scores
-
-
 def fuzzy_prioritizer(cities, actions, number_of_actions=5):
     top_actions = []
     all_scores = []  # List to store all scores
@@ -435,12 +318,14 @@ def fuzzy_prioritizer(cities, actions, number_of_actions=5):
         scores = {}
         for action in actions:
             score = fuzzy_score(city, action)
+            qualitative_value = defuzzify_score(score)  # Defuzzify the score
             scores[action["name"]] = score
             all_scores.append(
                 {
                     "city": city["name"],
                     "action": action["name"],
                     "score": score,
+                    "qualitative_score": qualitative_value,
                     "llm_output": "",  # No LLM output for fuzzy method
                 }
             )
@@ -453,63 +338,9 @@ def fuzzy_prioritizer(cities, actions, number_of_actions=5):
                     "city": city,
                     "action": action,
                     "score": scores[action],
+                    "qualitative_score": defuzzify_score(scores[action]),  # Defuzzify score for output
                 }
                 for action in top_action_names
             ]
         )
     return top_actions, all_scores  # Return both top actions and all scores
-
-
-def main(city_file, action_file, output_file, method, number_of_actions):
-    cities = read_cities(city_file)
-    actions = read_actions(action_file)
-    if method == 'quantitative':
-        top_actions, all_scores = quantitative_prioritizer(
-            cities, actions, number_of_actions
-        )
-        # Write the full list of quantitative scores
-        write_full_scores(
-            "quantitative_scores.csv",
-            sorted(all_scores, key=lambda x: x["score"], reverse=True),
-        )
-    elif method == 'qualitative':
-        top_actions, all_scores = qualitative_prioritizer(
-            cities, actions, number_of_actions
-        )
-        # Write the full list of qualitative scores including LLM outputs
-        write_full_scores(
-            "qualitative_scores.csv",
-            sorted(all_scores, key=lambda x: x["score"], reverse=True),
-        )
-    elif method == 'fuzzy':
-        top_actions, all_scores = fuzzy_prioritizer(
-            cities, actions, number_of_actions
-        )
-        # Write the full list of fuzzy scores
-        write_full_scores(
-            "fuzzy_scores.csv",
-            sorted(all_scores, key=lambda x: x["score"], reverse=True),
-        )
-    write_output(output_file, top_actions)
-
-
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("city_file")  # First positional argument
-    parser.add_argument("action_file")  # Second positional argument
-    parser.add_argument("output_file")  # Third positional argument
-    parser.add_argument(
-        "--method", choices=['qualitative', 'quantitative', 'fuzzy'], default='qualitative'
-    )  # Optional argument to select the method
-    parser.add_argument(
-        "number_of_actions", type=int
-    )  # Fourth positional argument
-    args = parser.parse_args()
-
-    main(
-        args.city_file,
-        args.action_file,
-        args.output_file,
-        args.method,
-        args.number_of_actions,
-    )
